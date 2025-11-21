@@ -1,0 +1,136 @@
+version: '3.7'
+
+x-airflow-common:
+  &airflow-common
+  build:
+    context: . # Build from the Dockerfile in the current directory
+    dockerfile: Dockerfile
+    args:
+      - AIRFLOW_UID=${AIRFLOW_UID}
+  environment:
+    &airflow-env
+    AIRFLOW_UID: ${AIRFLOW_UID}
+    AIRFLOW_GID: ${AIRFLOW_GID}
+    AIRFLOW_HOME: ${AIRFLOW_HOME}
+    AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR}
+    AIRFLOW__CELERY__BROKER_URL: ${AIRFLOW__CELERY__BROKER_URL}
+    AIRFLOW__CELERY__RESULT_BACKEND: ${AIRFLOW__CELERY__RESULT_BACKEND}
+    # Database configuration
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    # Security/Webserver config
+    AIRFLOW__WEBSERVER__SECRET_KEY: 'super-secret-key-replace-me'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./data:/opt/airflow/data # Mount your data folder for Spark/Airflow access
+
+services:
+  
+  ## 1. POSTGRES (Airflow Metadata Database)
+  postgres:
+    image: postgres:15.5
+    container_name: airflow-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ## 2. REDIS (Airflow Celery Broker)
+  redis:
+    image: redis:7.2-alpine
+    container_name: airflow-redis
+    ports:
+      - "6379:6379" # Optional, for local Redis tools
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  ## 3. AIRFLOW (Webserver, Scheduler, Worker)
+  airflow-init:
+    <<: *airflow-common # Inherit common config
+    container_name: airflow-init
+    entrypoint: /bin/bash # You still need bash to run multiple commands with '&&'
+    command: ["-c", "airflow db migrate && airflow users create --username admin --password admin --firstname Airflow --lastname User --role Admin --email admin@example.com"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    command: celery worker
+    depends_on:
+      airflow-scheduler:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  ## 4. APACHE SPARK (Master and Worker)
+  spark-master:
+    image: apache/spark:latest # Reliable, pre-configured Spark image
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      SPARK_MODE: master
+    ports:
+      - "9090:8080" # Spark Master Web UI
+      - "7077:7077" # Spark RPC Port (for Airflow/Worker to connect)
+    volumes:
+      - ./data:/opt/airflow/data # Share the data folder with Spark containers
+    restart: unless-stopped
+
+  spark-worker:
+    image: apache/spark:latest
+    container_name: spark-worker
+    hostname: spark-worker
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+    depends_on:
+      - spark-master
+    volumes:
+      - ./data:/opt/airflow/data
+    restart: unless-stopped
+
+## Volumes for data persistence
+volumes:
+  pg-data:
+  redis-data:
