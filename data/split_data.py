@@ -2,10 +2,10 @@ import pandas as pd
 import os
 
 # Path to CSV file we want to read from
-file_path = "orders.csv"
+file_path = "/opt/data/orders.csv"
 
 # Path to output directory to store split data
-output_dir = "data/raw"
+output_dir = "/opt/data/raw"
 
 def main():
     # Load the dataset

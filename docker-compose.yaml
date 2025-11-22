@@ -105,29 +105,27 @@ services:
 
   ## 4. APACHE SPARK (Master and Worker)
   spark-master:
-    image: apache/spark:latest # Reliable, pre-configured Spark image
+    image: apache/spark:3.5.0
     container_name: spark-master
     hostname: spark-master
-    environment:
-      SPARK_MODE: master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     ports:
-      - "9090:8080" # Spark Master Web UI
-      - "7077:7077" # Spark RPC Port (for Airflow/Worker to connect)
+      - "9090:8080"
+      - "7077:7077"
     volumes:
-      - ./data:/opt/airflow/data # Share the data folder with Spark containers
+      - ./data:/opt/data
     restart: unless-stopped
 
+
   spark-worker:
-    image: apache/spark:latest
+    image: apache/spark:3.5.0
     container_name: spark-worker
     hostname: spark-worker
-    environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     depends_on:
       - spark-master
     volumes:
-      - ./data:/opt/airflow/data
+      - ./data:/opt/data
     restart: unless-stopped
 
 ## Volumes for data persistence
