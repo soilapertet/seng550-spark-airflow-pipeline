@@ -1,2 +1,4 @@
 .env
 logs/
+orders.csv/
+data/incremental/raw/
